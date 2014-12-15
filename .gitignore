@@ -1,0 +1,7 @@
+bin/
+matlab/
+images/
+*.png
+*.jpg
+*.swp
+*.~
