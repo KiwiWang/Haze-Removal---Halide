@@ -1,7 +1,8 @@
-bin/
+images/*
 matlab/
-images/
 *.png
 *.jpg
 *.swp
 *.~
+!images/cones.png
+!images/forest1.png
