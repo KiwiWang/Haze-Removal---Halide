@@ -1,15 +1,16 @@
 /*
- * 2014-12-15, 20:45
+ * 2014-12-17, 21:32
  * algorithm part is finished roughly.
  * Note that some refinements can be explored. Please search "TODO" labels.
+ * 
+ * Schdule part finished. It runs much faster than default schedule.
+ * But still lots of things to try. Furthermore, this implementation is
+ * still a little slower than Matlab implementation. It may be because
+ * of scheduling or JIT. Those problems will be examined again after finishing
+ * performace measuring technique and AOT compilation version.
  *
- * However, this implementation is super slow(even slower than Matlab version)
- * It's because shedule part is not explicitly set. Now just use default
- * schedule, that is, 'inline' for almost all Func.
- *
- * So even though algorithm part needs some refinements, it may be more 
- * important to come up with a reasonable schedule part. And then we can 
- * use AOT compiing for this program or porting to Android.
+ * future work:
+ * use AOT compiling for this program and porting to Android.
  *
  */
 
@@ -230,8 +231,11 @@ int main(int argc, char **argv){
     // no need, use default, that is, inlined to sigma2_wnr
     // try vectorization -- this is illegal
     //local_sum2_dcp.update(0).vectorize(x, VEC_LEN);
+    local_sum2_dcp.store_at(sigma2_wnr, yo).compute_at(sigma2_wnr, yi);
+    local_sum2_dcp.vectorize(x, VEC_LEN);
+    local_sum2_dcp.update(0).vectorize(x, VEC_LEN);
     /* dcpf2 */
-    dcpf2.store_at(sigma2_wnr, yo).compute_at(sigma2_wnr, yi);
+    dcpf2.store_at(local_sum2_dcp, y).compute_at(local_sum2_dcp, x);
     dcpf2.vectorize(x, VEC_LEN);
 
     /* mu_wnr */
@@ -239,8 +243,9 @@ int main(int argc, char **argv){
     mu_wnr.vectorize(x, VEC_LEN);
     mu_wnr.compute_root();
     /* local_sum_dcp */
-    // try vectorization -- this is illegal
-    //local_sum_dcp.update(0).vectorize(x, VEC_LEN);
+    local_sum_dcp.store_at(mu_wnr, yo).compute_at(mu_wnr, yi);
+    local_sum_dcp.vectorize(x, VEC_LEN);
+    local_sum_dcp.update(0).vectorize(x, VEC_LEN);
 
     /*
      * JIT output
