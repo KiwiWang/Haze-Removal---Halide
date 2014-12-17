@@ -1,28 +1,40 @@
 /*
- * 2014-12-17, 21:32
+ * 2014-12-18, 01:37
  * algorithm part is finished roughly.
  * Note that some refinements can be explored. Please search "TODO" labels.
  * 
  * Schdule part finished. It runs much faster than default schedule.
  * But still lots of things to try. Furthermore, this implementation is
- * still a little slower than Matlab implementation. It may be because
- * of scheduling or JIT. Those problems will be examined again after finishing
- * performace measuring technique and AOT compilation version.
+ * much faster than Matlab implementation though Matlab implementation is 
+ * complete haze-removal algorithm. Try to find better scheduling.
+ *
+ * Personal Notes:
+ * on image size=[2488, 2488, 3]
+ *
+ *   MATLAB took 1.7xxx sec.
+ *   This program took 0.155x sec if ALL compute_root
+ *   This program took 0.283x sec if scheduling of finding parameters
+ *   (I have comment them out for testing ALL compute_root)
  *
  * future work:
- * use AOT compiling for this program and porting to Android.
+ * Refine algorithm to obtain complete implementation
+ * Use AOT compiling for this program and porting to Android.
  *
  */
 
-
-#define STRIP_WIDTH 32 // width of parallel computing strip
+// Those two parameters have critical imapct on performance
+#define STRIP_WIDTH 4 // width of parallel computing strip
 #define VEC_LEN 16 // in x86 structure(SSE instructions), may use length 4*N?
+
+#define ITER 5 // iterating times for measuring timing
 
 #include <stdio.h>
 #include <Halide.h>
 
 using Halide::Image;
 #include "image_io.h"
+
+#include "clock.h"
 
 using namespace Halide;
 
@@ -135,21 +147,17 @@ int main(int argc, char **argv){
      * Schedule Parts 
      */
     // TODO: need to experiment various schedule for haze removal
-    // There are many stages and sub-stages in this implementation.
-    // We may need to plot some diagrams to help finding better schduling.
-    
-    //lut.compute_root();
-    //airlight.compute_root();
-    //sigma2_n.compute_root();
 
-    // **************************************
-    // from bottom(restore_img) to up(input) schduling
+    //    
+    // begin to filter DCP with adaptive wiener filter
+    // from bottom(restore_img) to up(dcp_f) schduling
     //
+
     // Now we can sigma2_n.compute_root() and do parallel both at restore_img and inside sigma2_n
-    // It's becuase calculating sigma2_n has RDom box_wimg. So to avoid alloc memory size of whole
+    // It's becuase calculating sigma2_n has RDom box_wimg. So to avoid to scan whole
     // image for every parallel for-loop, we need sigma2_wnr and sigma2_n stored at root.
     //
-    // So here come up with strategy 1: divide algorithm to 2 parts:
+    // Strategy one: divide algorithm to 2 parts:
     // Part1 for getting all wienre filter paramters and store at root. Parallel can be applied when 
     // calculating paramters.
     // Part2 for restoring image. Parallel can be applied, too.
@@ -161,104 +169,107 @@ int main(int argc, char **argv){
         .unroll(c);
 
     // Parallel here require at least sigma2_n stored at root.
-    // Or we may need too much memory size of WHOLE image for every parallel for-loop because sigma2_n need whole simga2_wnr.
+    // Or we may need to scan whole image for every parallel for-loop because sigma2_n need whole simga2_wnr.
     // to be faster, it'll be ok to store mu_wnr, sigma2_wnr at root. But for saving memory, it's also ok to compute 
     // sigma2_wnr and mu_wnr here again. Note that we have already calculated sigma2_wnr and mu_wnr one time for getting
     // sigma2_n
-    // strip-wise parallel computing at y-axis
-    Var yi, yo;
-    restore_img.split(y, yo, yi, STRIP_WIDTH)
-        .parallel(yo);
-    // because we compute_root() clamped and airlight later, so it will be ok to vectorize x here
-    // also we need store t_map, which requires sigma2_n is stored in advance
+
+    restore_img.parallel(y);
     restore_img.vectorize(x, VEC_LEN);
 
     /* clapmed, airlight, t_map */
-    // restore_img needs t_map, airlight, clamped.
+    // No neighbor computing in path t_map->dcpf_refine->weight, so all inlined into restore_img
+
     // clamped is used almost all stages. Even airlight needs WHOLE clamped, so compute_root()
-    // TODO: will parallel and vectorization here affect performance?
     clamped.reorder(c, x ,y)
         .bound(c, 0, 3)
         .unroll(c);
-    clamped.split(y, yo, yi, STRIP_WIDTH)
-        .parallel(yo);
+    clamped.parallel(y);
     clamped.vectorize(x, VEC_LEN);
     clamped.compute_root();
-    // because we unroll 'c', and computing airlight need whole image. So we compute_root() it.
-    // Although we can compute_at(restore_img, c), this will do too much redundant work. Remember
-    // that we reorder 'c' into innermost for-loop. Fortunately, airlight requires small memory.
     // TODO: test no reorder 'c' version. Then we can use airlight.compute_at(restore_img, c)
-    // TODO: will parallel affect performance?
     airlight.parallel(c);
     airlight.compute_root();
-    // normal producer(t_map) and comsumer(restore_img) pattern without stoage. Require wiener paramters stored at root.
-    // TODO: test version: no wiener paramters stored at root. I guess it'll be very slow.
-    t_map.compute_at(restore_img, yi);
-    // vectorize t_map? depend on if vectorize restore_img?
-    t_map.vectorize(x, VEC_LEN);
-
-    /* dcpf_refine */
-    // because wiener parameters are stored at root, vectorization can be done as t_map
-    // TODO: how about no vectorization?
-    dcpf_refine.vectorize(x, VEC_LEN);
-    dcpf_refine.compute_at(t_map, y);
-
-    /* weight, dcpf_p */
-    // weight uses all stored paramters, so it's easy
-    weight.vectorize(x, VEC_LEN);
-    weight.compute_at(dcpf_refine, y);
-    // dcpf_p is also used when calculating wiener paramters. 
-    // This is not a complex computing. But here also use compute_root()
-    // TODO: dont use compute_root()
-    dcpf_p.split(y, yo, yi, STRIP_WIDTH).parallel(yo);
-    dcpf_p.vectorize(x, VEC_LEN); // Is this important?
+   
+    /* dcpf_p */
+    dcpf_p.parallel(y);
+    dcpf_p.vectorize(x, VEC_LEN);
     dcpf_p.compute_root();
     
     /* clamped_f_no_air */
     // this is only used in calculating dcpf_p. No need to store
     // and keep inline
 
-    /* begin to extract wiener filter paramters. */
+    //
+    // begin to extract wiener filter paramters. 
     // from bottom(sigma2_n) to up(local_sum_dcp and local_sum2_dcp)
+    //
+
+    Var yi, yo; // for neighboring computing
     /* sigma2_n */
     sigma2_n.compute_root();
 
     /* sigma2_wnr */
+    /*
     sigma2_wnr.split(y, yo, yi, STRIP_WIDTH).parallel(yo);
     sigma2_wnr.vectorize(x, VEC_LEN);
     sigma2_wnr.compute_root();
+    */
+    // test all compute_root()
+    sigma2_wnr.compute_root().parallel(y).vectorize(x, VEC_LEN);
+
     /* local_sum2_dcp */
-    // no need, use default, that is, inlined to sigma2_wnr
-    // try vectorization -- this is illegal
-    //local_sum2_dcp.update(0).vectorize(x, VEC_LEN);
+    /*
     local_sum2_dcp.store_at(sigma2_wnr, yo).compute_at(sigma2_wnr, yi);
     local_sum2_dcp.vectorize(x, VEC_LEN);
+    local_sum2_dcp.update(0).split(y, yo, yi, STRIP_WIDTH);
     local_sum2_dcp.update(0).vectorize(x, VEC_LEN);
+    */
+    // test all compute_root()
+    local_sum2_dcp.compute_root().parallel(y).vectorize(x, VEC_LEN);
+    local_sum2_dcp.update(0).parallel(y).vectorize(x, VEC_LEN);
     /* dcpf2 */
-    dcpf2.store_at(local_sum2_dcp, y).compute_at(local_sum2_dcp, x);
+    /*
+    dcpf2.store_at(local_sum2_dcp, yo).compute_at(local_sum2_dcp, yi);
     dcpf2.vectorize(x, VEC_LEN);
+    */
+    // test all compute_root()
+    dcpf2.compute_root().parallel(y).vectorize(x, VEC_LEN);
 
     /* mu_wnr */
+    /*
     mu_wnr.split(y, yo, yi, STRIP_WIDTH).parallel(yo);
     mu_wnr.vectorize(x, VEC_LEN);
     mu_wnr.compute_root();
+    */
+    // test all compute_root()
+    mu_wnr.compute_root().parallel(y).vectorize(x, VEC_LEN);
     /* local_sum_dcp */
+    /*
     local_sum_dcp.store_at(mu_wnr, yo).compute_at(mu_wnr, yi);
     local_sum_dcp.vectorize(x, VEC_LEN);
     local_sum_dcp.update(0).vectorize(x, VEC_LEN);
+    */
+    // test all compute_root()
+    local_sum_dcp.compute_root().parallel(y).vectorize(x, VEC_LEN);
+    local_sum_dcp.update(0).parallel(y).vectorize(x, VEC_LEN);
 
     /*
      * JIT output
      */
     // Func to testing output...
-    //Func test;
-    //test(x, y, c) = cast<uint8_t>(restore_img(x, y, c)*255.0f);
 
     Image<uint8_t> output = restore_img.realize(input.width(), input.height(), input.channels());
-    if(argc==2){
+
+    /* measure timing */
+    double t1 = current_time();
+    for(int iter=0; iter<ITER; iter++)
+        restore_img.realize(input.width(), input.height(), input.channels());
+    double t2 = current_time();
+    printf("took %f sec to finish image size=[%d, %d]\n", (t2-t1)/(1000*ITER), input.height(), input.width() );
+    if(argc==2)
         save(output, output_name);
-        return 0;
-    }else
+    else
         save(output, argv[2]);
     return 0;
 }// int main
