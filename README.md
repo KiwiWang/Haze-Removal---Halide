@@ -1,5 +1,7 @@
 NOTE
 ====
+Tested on Linux Mint 17.1 x64
+
 *Makefile* is very, very naive style. But the most importance to note is path to halide library.
 
 Binaries should be easily built if we have correct path to halide libary(`-I` and `-L` value of g++).
