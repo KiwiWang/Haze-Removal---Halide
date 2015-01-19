@@ -42,6 +42,7 @@ int main(int argc, char **argv){
     
     // color image
     ImageParam input(type_of<uint8_t>(), 3);
+    //ImageParam input(type_of<float>(), 3);
 
     Var x, y, c;
 

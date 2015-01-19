@@ -51,6 +51,7 @@ int main(int argc, char **argv){
     }//if(argc==2)
 
     Image<uint8_t> input = load<uint8_t>(argv[1]);
+    //Image<float> input = load<float>(argv[1]);
 
     Var x, y, c;
 

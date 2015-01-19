@@ -8,6 +8,7 @@
 int main(int argc, char **argv){
 
     Image<uint8_t> input =  load<uint8_t>(argv[1]);
+    //Image<float> input =  load<float>(argv[1]);
     Image<uint8_t> output(input.width(), input.height(), input.channels());
 
 
